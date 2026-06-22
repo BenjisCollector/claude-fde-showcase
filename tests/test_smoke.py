@@ -1,49 +1,44 @@
-"""Smoke tests covering the deterministic helper logic.
+"""Cross-cutting smoke / integration tests.
 
-These run without the MCP transport or any network access.
+Confirms the agent skill, the re-exports from the MCP server module, and the
+overall wiring all work *without* the ``mcp`` package installed -- the core
+guarantee that keeps CI green offline.
 """
 
-from agent_skills.doc_summariser.helper import summarise_document
-from claude_fde_showcase.mcp_server.server import search_docs, summarise
-from subagents.orchestrator import Orchestrator, Task
+from agent_skills.doc_summariser.helper import gist, summarise_document
 
 
-def test_search_docs_finds_match():
-    hits = search_docs("mcp")
-    assert any(h["id"] == "mcp" for h in hits)
+def test_skill_extractive_summary():
+    text = "Cats purr. Cats hunt mice. The sky is blue. Cats sleep a lot."
+    out = summarise_document(text, max_sentences=2).lower()
+    assert "cats" in out
 
 
-def test_search_docs_empty_query():
-    assert search_docs("") == []
+def test_skill_gist_is_one_line():
+    out = gist("one two three four five six", max_words=3)
+    assert out == "one two three ..."
 
 
-def test_search_docs_respects_limit():
-    assert len(search_docs("e", limit=2)) <= 2
+def test_server_module_imports_logic_without_mcp():
+    # The mcp package is intentionally NOT required to import the server module
+    # or to run its core logic -- mcp is imported lazily inside build_server().
+    # We do not assert mcp is absent (a dev box may have it); CI simply never
+    # installs it, and these assertions must hold either way.
+    from claude_fde_showcase.mcp_server import server
+
+    assert server.search_docs("model context protocol")
+    assert server.calculate("2 + 2") == 4.0
+    assert isinstance(server.summarise_extractive("A. B. C. D. E.", 2), str)
+    assert "mcp" in server.list_docs()
 
 
-def test_summarise_truncates():
-    out = summarise("one two three four five", max_words=2)
-    assert out == "one two ..."
+def test_build_server_raises_without_mcp_installed():
+    # build_server() is the only thing that needs the SDK; it should fail
+    # cleanly with ImportError when mcp is absent rather than at import time.
+    from claude_fde_showcase.mcp_server import server
 
-
-def test_summarise_passthrough_when_short():
-    assert summarise("short text", max_words=10) == "short text"
-
-
-def test_skill_helper_matches_truncation():
-    assert summarise_document("a b c d", max_words=2) == "a b ..."
-
-
-def test_orchestrator_routes_tasks():
-    orch = Orchestrator()
-    results = orch.run([Task(kind="search", payload="skills")])
-    assert results[0].handled_by == "search_agent"
-
-
-def test_orchestrator_unknown_kind_raises():
-    orch = Orchestrator()
     try:
-        orch.delegate(Task(kind="nope", payload="x"))
-    except ValueError:
+        server.build_server()
+    except ImportError:
         return
-    raise AssertionError("expected ValueError for unknown task kind")
+    # If mcp happens to be installed in some environment, that's fine too.

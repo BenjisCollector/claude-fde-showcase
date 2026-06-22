@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: py_compile + pytest (no mcp, no network)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install test dependencies only
+        # Deliberately install pytest WITHOUT the mcp SDK. The core logic must
+        # compile, import, and pass its tests with no MCP package and no network.
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "pytest>=8.0"
+
+      - name: Confirm mcp is NOT installed
+        run: |
+          python - <<'PY'
+          import importlib.util, sys
+          if importlib.util.find_spec("mcp") is not None:
+              sys.exit("mcp should not be installed in CI")
+          print("ok: mcp is absent, as intended")
+          PY
+
+      - name: Byte-compile all sources (py_compile)
+        run: |
+          python -m py_compile \
+            src/claude_fde_showcase/__init__.py \
+            src/claude_fde_showcase/mcp_server/__init__.py \
+            src/claude_fde_showcase/mcp_server/server.py \
+            src/claude_fde_showcase/tools/__init__.py \
+            src/claude_fde_showcase/tools/search.py \
+            src/claude_fde_showcase/tools/summarise.py \
+            src/claude_fde_showcase/tools/calculator.py \
+            subagents/__init__.py \
+            subagents/orchestrator.py \
+            agent_skills/doc_summariser/helper.py
+
+      - name: Run test suite
+        env:
+          PYTHONPATH: src:.
+        run: python -m pytest -q
+
+      - name: Smoke-run the orchestrator and skill demos
+        env:
+          PYTHONPATH: src:.
+        run: |
+          python -m subagents.orchestrator
+          python agent_skills/doc_summariser/helper.py

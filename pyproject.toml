@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "claude-fde-showcase"
-version = "0.1.0"
+version = "0.2.0"
 description = "Skeleton demo of the Forward Deployed Engineer / Applied AI skillset: MCP servers, sub-agents, and agent skills."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -12,15 +12,18 @@ license = { text = "MIT" }
 authors = [{ name = "Yousef Qasim", email = "yqasem10@gmail.com" }]
 keywords = ["mcp", "claude", "agents", "applied-ai", "forward-deployed-engineer"]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 4 - Beta",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
 ]
-dependencies = [
-    "mcp>=1.2.0",
-]
+# The core tool logic, orchestrator, and skills have NO runtime dependencies --
+# they use the standard library only. The `mcp` SDK is needed solely to *serve*
+# the tools over MCP, so it lives in an optional extra. This is what lets tests
+# and CI run green without the SDK, a network, or any API key.
+dependencies = []
 
 [project.optional-dependencies]
+mcp = ["mcp>=1.2.0"]
 dev = ["pytest>=8.0"]
 
 [project.scripts]

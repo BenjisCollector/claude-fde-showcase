@@ -1,72 +1,97 @@
-"""A minimal MCP server exposing two tools.
+"""MCP server exposing the FDE showcase tools.
 
-This uses the official ``mcp`` Python SDK (FastMCP). The tools return
-deterministic placeholder output so the server is genuinely runnable as a
-scaffold without any external API keys or network calls.
+This uses the official ``mcp`` Python SDK (FastMCP), but imports it **lazily**
+inside :func:`build_server` so that all of the underlying tool logic can be
+imported and unit-tested without the ``mcp`` package installed. That separation
+is deliberate: the pure logic lives in :mod:`claude_fde_showcase.tools`, runs
+offline, and is what CI exercises; the MCP layer is a thin transport wrapper
+over it.
 
 Run it over stdio with::
 
     python -m claude_fde_showcase.mcp_server.server
+    # or, once installed:
+    claude-fde-mcp
 
-The pure-logic helpers (``search_docs`` / ``summarise``) are importable and
-unit-testable independently of the MCP transport.
+Tools exposed:
+
+* ``search_docs``  -- TF-IDF keyword search over the local ``docs/`` corpus.
+* ``summarise``    -- deterministic extractive summarisation.
+* ``calculate``    -- safe arithmetic expression evaluation.
+* ``list_docs``    -- list the document ids available to ``search_docs``.
 """
 
 from __future__ import annotations
 
-# A tiny in-memory "corpus" so search returns something deterministic.
-_DOCS: dict[str, str] = {
-    "mcp": "The Model Context Protocol (MCP) lets tools expose capabilities to LLM clients.",
-    "subagents": "Sub-agents let an orchestrator delegate a scoped task to a specialised worker.",
-    "skills": "Agent skills package a capability as a SKILL.md plus optional helper code.",
-    "fde": "A Forward Deployed Engineer ships production AI systems alongside customers.",
-}
+# Re-export the pure logic so existing callers (and tests) can import directly
+# from this module without pulling in the mcp transport.
+from claude_fde_showcase.tools.calculator import CalculatorError, calculate
+from claude_fde_showcase.tools.search import DocStore, search_docs
+from claude_fde_showcase.tools.summarise import summarise, summarise_extractive
+
+__all__ = [
+    "build_server",
+    "main",
+    "calculate",
+    "CalculatorError",
+    "search_docs",
+    "summarise",
+    "summarise_extractive",
+    "DocStore",
+    "list_docs",
+]
 
 
-def search_docs(query: str, limit: int = 3) -> list[dict[str, str]]:
-    """Return docs whose key or body contains the query (case-insensitive).
-
-    Deterministic placeholder retrieval over a small in-memory corpus.
-    """
-    q = query.strip().lower()
-    if not q:
-        return []
-    hits = [
-        {"id": key, "text": text}
-        for key, text in _DOCS.items()
-        if q in key.lower() or q in text.lower()
-    ]
-    return hits[: max(0, limit)]
-
-
-def summarise(text: str, max_words: int = 20) -> str:
-    """Return a deterministic, length-bounded "summary" of ``text``.
-
-    Placeholder logic: truncate to ``max_words`` words. No model call.
-    """
-    words = text.split()
-    if len(words) <= max_words:
-        return text.strip()
-    return " ".join(words[:max_words]).rstrip(".,;:") + " ..."
+def list_docs() -> list[str]:
+    """Return the ids of every document available to ``search_docs``."""
+    return [doc.id for doc in DocStore.from_dir().documents]
 
 
 def build_server():
-    """Construct and return the FastMCP server with both tools registered."""
+    """Construct and return the FastMCP server with all tools registered.
+
+    The ``mcp`` import is deliberately local so importing this module (for the
+    re-exported pure logic) never requires the SDK to be installed.
+    """
     from mcp.server.fastmcp import FastMCP
 
-    mcp = FastMCP("claude-fde-showcase")
+    server = FastMCP("claude-fde-showcase")
 
-    @mcp.tool()
-    def search_docs_tool(query: str, limit: int = 3) -> list[dict[str, str]]:
-        """Search the demo corpus and return matching documents."""
+    @server.tool()
+    def search_docs_tool(query: str, limit: int = 3) -> list[dict[str, object]]:
+        """Search the local docs corpus and return the best-matching documents.
+
+        Args:
+            query: natural-language or keyword query.
+            limit: maximum number of hits to return (default 3).
+        """
         return search_docs(query, limit)
 
-    @mcp.tool()
-    def summarise_tool(text: str, max_words: int = 20) -> str:
-        """Summarise text down to at most ``max_words`` words."""
-        return summarise(text, max_words)
+    @server.tool()
+    def summarise_tool(text: str, max_sentences: int = 3) -> str:
+        """Produce a deterministic extractive summary of ``text``.
 
-    return mcp
+        Args:
+            text: the document to summarise.
+            max_sentences: upper bound on summary length in sentences.
+        """
+        return summarise_extractive(text, max_sentences)
+
+    @server.tool()
+    def calculate_tool(expression: str) -> float:
+        """Safely evaluate an arithmetic expression and return the number.
+
+        Supports + - * / // % **, parentheses, and common math functions
+        (sqrt, log, sin, ...). Never executes arbitrary code.
+        """
+        return calculate(expression)
+
+    @server.tool()
+    def list_docs_tool() -> list[str]:
+        """List the ids of all documents searchable via search_docs."""
+        return list_docs()
+
+    return server
 
 
 def main() -> None:
